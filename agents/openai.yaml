@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autonomous Research Orchestrator"
+  short_description: "Continuously pursue research goals with Brain and Luna"
+  default_prompt: "Use $autonomous-research-orchestrator to resume this project, continuously pursue its goal within session limits, and create a successor Brain when needed while retaining every predecessor task as visible history."

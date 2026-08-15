@@ -1,0 +1,82 @@
+{
+  "schema_version": 4,
+  "project_id": "<project-id>",
+  "project_title": "<project-title>",
+  "research_root": "<absolute-path>",
+  "modality": "empirical-computational",
+  "source_precedence": {
+    "normative_plan": "task_plan.md",
+    "evidence_record": "findings.md",
+    "status_record": "progress.md"
+  },
+  "artifact_system": {
+    "orchestration_root": "artifacts/orchestration",
+    "pipeline_state": "artifacts/orchestration/pipeline_state.json",
+    "brain_handoff": "artifacts/orchestration/brain_handoff.md",
+    "results_root": "artifacts/orchestration/results"
+  },
+  "coordination": {
+    "surface": "codex_cli_ephemeral_workers",
+    "primary_role": "one_active_brain",
+    "delegated_agent": "luna_worker_via_codex_exec",
+    "successor_top_level_tasks": "brain_rollover_only",
+    "shared_control_writes": "active_brain_generation_only"
+  },
+  "documentation": {
+    "language_policy": "project_language_first",
+    "main_documents": [
+      "task_plan.md",
+      "findings.md",
+      "progress.md"
+    ],
+    "default_experiment_artifact": "result.json",
+    "full_spec_report": "complex_expensive_or_confirmatory_only",
+    "update_on_substantive_change_only": true
+  },
+  "portfolio_policy": {
+    "default_active_routes": 1,
+    "max_active_routes": 3,
+    "route_statuses": [
+      "candidate",
+      "active",
+      "parked",
+      "pruned",
+      "completed"
+    ],
+    "depths": [
+      "scout",
+      "focus",
+      "confirm"
+    ],
+    "prefer_cheapest_discriminating_probe": true,
+    "reject_blind_cartesian_search": true,
+    "allow_justified_joint_system_experiments": true
+  },
+  "verification": {
+    "normal_research": "one_luna_targeted_sanity_check_plus_brain_core_result_inspection",
+    "stronger_validation": "decision_reversing_integrity_authorization_or_major_resource_risk_only",
+    "cryptographic_provenance": "user_explicit_only",
+    "global_audit_in_normal_loop": false,
+    "heading_contracts": false
+  },
+  "models": {
+    "brain": {
+      "role": "research_director"
+    },
+    "luna_worker": {
+      "model": "gpt-5.6-luna",
+      "reasoning": "max",
+      "transport": "codex_cli_ephemeral",
+      "runner": "scripts/run_luna_worker.py",
+      "identity_acceptance": "catalog_plus_runtime_header"
+    }
+  },
+  "legacy_compatibility": {
+    "readable_schema_versions": [2, 3],
+    "migration_target": 4,
+    "retired_skill_names": [
+      "advance-research-stage",
+      "visible-research-orchestrator"
+    ]
+  }
+}

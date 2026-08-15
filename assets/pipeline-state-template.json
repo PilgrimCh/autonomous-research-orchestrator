@@ -1,0 +1,75 @@
+{
+  "schema_version": 4,
+  "project_id": "<project-id>",
+  "autonomy_session": {
+    "session_id": "<session-id>",
+    "enabled": false,
+    "project_goal": "<project-goal>",
+    "goal_status": "unresolved",
+    "global_limits": {
+      "wall_minutes": 240,
+      "worker_assignments": 8,
+      "external_calls": 0,
+      "external_cost_usd": 0.0
+    },
+    "global_budget_used": {
+      "wall_minutes": 0,
+      "worker_assignments": 0,
+      "external_calls": 0,
+      "external_cost_usd": 0.0
+    },
+    "global_budget_remaining": {
+      "wall_minutes": 240,
+      "worker_assignments": 8,
+      "external_calls": 0,
+      "external_cost_usd": 0.0
+    },
+    "allowed": {
+      "local_code": true,
+      "local_compute": true,
+      "luna_cli_workers": true,
+      "native_luna_subagents": false,
+      "brain_rollover": true,
+      "development_data": true,
+      "public_read_only_web": false,
+      "downloads": false,
+      "experimental_api": false,
+      "new_rollouts": false
+    },
+    "forbidden": {
+      "untouched_confirmation": true,
+      "destructive_actions": true,
+      "uploads": true,
+      "authenticated_services": true,
+      "goal_expansion": true
+    }
+  },
+  "brain_runtime": {
+    "active_brain_generation": 1,
+    "previous_brain_generation": null,
+    "active_brain_task_id": null,
+    "previous_brain_task_id": null,
+    "brain_task_lineage": [],
+    "context_health": "healthy",
+    "rollover_count": 0,
+    "pending_successor_generation": null,
+    "handoff_path": "artifacts/orchestration/brain_handoff.md",
+    "handoff_status": "none"
+  },
+  "research_runtime": {
+    "state": "READY",
+    "active_stage_id": null,
+    "stage_count": 0,
+    "active_route_ids": [],
+    "route_states": {},
+    "active_experiment_ids": [],
+    "completed_experiment_ids": [],
+    "active_luna_tasks": [],
+    "next_action": "inspect_goal_gap"
+  },
+  "integrity_runtime": {
+    "invalidated_artifacts": [],
+    "unresolved_issues": []
+  },
+  "last_transition": null
+}
