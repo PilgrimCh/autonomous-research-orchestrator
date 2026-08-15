@@ -21,6 +21,11 @@ STATES = {
     "WORKER_PLATFORM_BLOCKED",
 }
 CONTEXT_HEALTH = {"healthy", "rollover_recommended", "rollover_required"}
+CONTEXT_HEALTH_RANK = {
+    "healthy": 0,
+    "rollover_recommended": 1,
+    "rollover_required": 2,
+}
 HANDOFF_STATUS = {"none", "prepared", "transferred", "platform_blocked"}
 GOAL_STATUS = {"unresolved", "complete", "infeasible"}
 ROUTE_STATUS = {"candidate", "active", "parked", "pruned", "completed"}
@@ -224,6 +229,48 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
         errors.append("brain_runtime.active_brain_generation must be a positive integer")
     if brain.get("context_health") not in CONTEXT_HEALTH:
         errors.append("brain_runtime.context_health is invalid")
+    compaction_count = brain.get("context_compaction_count", 0)
+    if (
+        not isinstance(compaction_count, int)
+        or isinstance(compaction_count, bool)
+        or compaction_count < 0
+    ):
+        errors.append("brain_runtime.context_compaction_count must be nonnegative")
+        compaction_count = 0
+    compaction_events = brain.get("context_compaction_event_ids", [])
+    if not isinstance(compaction_events, list) or not all(
+        isinstance(value, str) and value for value in compaction_events
+    ):
+        errors.append(
+            "brain_runtime.context_compaction_event_ids must be a list of non-empty strings"
+        )
+        compaction_events = []
+    if len(compaction_events) != len(set(compaction_events)):
+        errors.append("brain_runtime.context_compaction_event_ids contains duplicates")
+    if len(compaction_events) > compaction_count:
+        errors.append("recorded compaction event IDs exceed compaction count")
+    compaction_floor = (
+        "rollover_required"
+        if compaction_count >= 2
+        else "rollover_recommended"
+        if compaction_count == 1
+        else "healthy"
+    )
+    context_health = brain.get("context_health")
+    if (
+        context_health in CONTEXT_HEALTH
+        and CONTEXT_HEALTH_RANK[context_health] < CONTEXT_HEALTH_RANK[compaction_floor]
+    ):
+        errors.append(
+            f"context health must be at least {compaction_floor} after recorded compaction"
+        )
+    rollover_reason = brain.get("rollover_reason")
+    if rollover_reason is not None and (
+        not isinstance(rollover_reason, str) or not rollover_reason
+    ):
+        errors.append("brain_runtime.rollover_reason must be null or a non-empty string")
+    if compaction_count >= 2 and rollover_reason != "second_context_compaction":
+        errors.append("second context compaction must set its rollover reason")
     if brain.get("handoff_status") not in HANDOFF_STATUS:
         errors.append("brain_runtime.handoff_status is invalid")
     if not isinstance(brain.get("rollover_count"), int) or brain.get("rollover_count", -1) < 0:
@@ -233,6 +280,8 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
     if brain.get("handoff_status") == "prepared":
         if pending != generation + 1:
             errors.append("prepared rollover must target exactly the next generation")
+        if brain.get("context_health") != "rollover_required":
+            errors.append("prepared rollover requires rollover_required context health")
     elif pending is not None:
         errors.append("pending successor generation is allowed only while handoff is prepared")
 

@@ -23,7 +23,19 @@ Persist one self-contained JSON assignment per task. It must include:
   "result_path": "artifacts/experiments/route-a-scout-01/result.json",
   "targeted_sanity_check": "One decision-relevant check",
   "resource_ceiling": {"wall_minutes": 20, "external_calls": 0},
-  "repair_authority": "Routine execution-preserving fixes inside write_scope only",
+  "repair_authority": {
+    "allowed": ["Routine execution-preserving fixes inside write_scope"],
+    "forbidden": ["Scientific-contract or authorization changes"],
+    "debug_cycle_limit": 3,
+    "required_sequence": [
+      "reproduce",
+      "minimize",
+      "diagnose",
+      "repair",
+      "targeted_validate",
+      "resume_original_experiment"
+    ]
+  },
   "stopping_rule": "Stop after result and sanity check, or when the ceiling is reached"
 }
 ```
@@ -60,3 +72,5 @@ The runner writes `run.json`, CLI logs, and the last model message beneath `arti
 Track live executions in `research_runtime.active_luna_tasks` with `transport: codex_cli_ephemeral`, CLI executable/version, process or shell cell, worktree, assignment path, run record, result path, and status. A task name containing `luna` is not evidence of model identity.
 
 If a shell invocation yields a running cell, wait passively on that exact cell; do not launch a duplicate. When Brain has no independent decision-relevant work, do not poll the cell or its files, emit heartbeat/status commentary, or resume model reasoning merely to verify liveness. Use the platform's blocking wait path and resume Brain only on completion, failure, a genuine timeout that requires handling, or an exception that requires a Brain decision. On CLI discovery, catalog, timeout, identity, or result-contract failure, inspect `run.json` and logs, preserve the unresolved task, and enter `WORKER_PLATFORM_BLOCKED` only when no authorized CLI Luna path remains. Do not kill, duplicate, or custom-migrate an active Luna CLI process during Brain rollover.
+
+For an execution blocker, require the worker to use the bounded debug sequence in `repair_authority` instead of immediately returning or silently bypassing the failing component. The result contract requires a `debug` object. A scientific status is accepted only after an encountered blocker is resolved and the original experiment resumes; otherwise the worker must return `blocked` or `invalid` with its attempts and narrow root cause preserved.

@@ -16,6 +16,11 @@ BUDGET_KEYS = (
     "external_cost_usd",
 )
 CONTEXT_HEALTH = {"healthy", "rollover_recommended", "rollover_required"}
+CONTEXT_HEALTH_RANK = {
+    "healthy": 0,
+    "rollover_recommended": 1,
+    "rollover_required": 2,
+}
 LINEAGE_STATUS = {"active", "retired"}
 
 
@@ -83,6 +88,23 @@ def assert_active(
             f"task {task_id!r} is not the active Brain task {active_task_id!r}", code=9
         )
     return brain
+
+
+def context_compaction_count(brain: dict[str, Any]) -> int:
+    value = brain.get("context_compaction_count", 0)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise RuntimeErrorWithCode(
+            "brain_runtime.context_compaction_count must be a nonnegative integer"
+        )
+    return value
+
+
+def context_health_floor(compactions: int) -> str:
+    if compactions >= 2:
+        return "rollover_required"
+    if compactions == 1:
+        return "rollover_recommended"
+    return "healthy"
 
 
 def transfer_lineage(
@@ -200,9 +222,80 @@ def command_assert(args: argparse.Namespace) -> dict[str, Any]:
 def command_set_context(args: argparse.Namespace) -> dict[str, Any]:
     _, state_path, state = load_runtime(args.root)
     brain = assert_active(state, args.generation, args.task_id)
+    current = brain.get("context_health", "healthy")
+    if current not in CONTEXT_HEALTH:
+        raise RuntimeErrorWithCode("brain_runtime.context_health is invalid")
+    floor = context_health_floor(context_compaction_count(brain))
+    if CONTEXT_HEALTH_RANK[args.health] < CONTEXT_HEALTH_RANK[floor]:
+        raise RuntimeErrorWithCode(
+            f"context health cannot be lower than {floor} after recorded compaction"
+        )
+    if CONTEXT_HEALTH_RANK[args.health] < CONTEXT_HEALTH_RANK[current]:
+        raise RuntimeErrorWithCode(
+            "context health is monotonic within one Brain generation"
+        )
     brain["context_health"] = args.health
+    if args.health == "rollover_required" and not brain.get("rollover_reason"):
+        brain["rollover_reason"] = args.reason or "observable_context_degradation"
     atomic_write(state_path, state)
-    return {"status": "updated", "context_health": args.health}
+    return {
+        "status": "updated",
+        "context_health": args.health,
+        "rollover_reason": brain.get("rollover_reason"),
+    }
+
+
+def command_record_compaction(args: argparse.Namespace) -> dict[str, Any]:
+    _, state_path, state = load_runtime(args.root)
+    brain = assert_active(state, args.generation, args.task_id)
+    raw_events = brain.get("context_compaction_event_ids", [])
+    if not isinstance(raw_events, list) or not all(
+        isinstance(value, str) and value for value in raw_events
+    ):
+        raise RuntimeErrorWithCode(
+            "brain_runtime.context_compaction_event_ids must be a list of non-empty strings"
+        )
+    events = list(raw_events)
+    event_id = args.event_id.strip() if args.event_id else None
+    if event_id and event_id in events:
+        return {
+            "status": "duplicate",
+            "event_id": event_id,
+            "context_compaction_count": context_compaction_count(brain),
+            "context_health": brain.get("context_health", "healthy"),
+            "rollover_required": brain.get("context_health") == "rollover_required",
+        }
+
+    count = context_compaction_count(brain) + 1
+    if event_id:
+        events.append(event_id)
+    brain["context_compaction_count"] = count
+    brain["context_compaction_event_ids"] = events
+    floor = context_health_floor(count)
+    current = brain.get("context_health", "healthy")
+    if current not in CONTEXT_HEALTH:
+        raise RuntimeErrorWithCode("brain_runtime.context_health is invalid")
+    if CONTEXT_HEALTH_RANK[current] < CONTEXT_HEALTH_RANK[floor]:
+        brain["context_health"] = floor
+    if count >= 2:
+        brain["rollover_reason"] = "second_context_compaction"
+        research = state.get("research_runtime")
+        if isinstance(research, dict):
+            active_luna = research.get("active_luna_tasks", [])
+            research["next_action"] = (
+                "finish_active_luna_then_prepare_rollover"
+                if active_luna
+                else "write_handoff_and_prepare_rollover"
+            )
+    atomic_write(state_path, state)
+    return {
+        "status": "recorded",
+        "event_id": event_id,
+        "context_compaction_count": count,
+        "context_health": brain["context_health"],
+        "rollover_required": count >= 2,
+        "rollover_reason": brain.get("rollover_reason"),
+    }
 
 
 def command_prepare(args: argparse.Namespace) -> dict[str, Any]:
@@ -214,6 +307,10 @@ def command_prepare(args: argparse.Namespace) -> dict[str, Any]:
     allowed = session.get("allowed", {})
     if not isinstance(allowed, dict) or allowed.get("brain_rollover") is not True:
         raise RuntimeErrorWithCode("standing authorization does not allow Brain rollover")
+    if brain.get("context_health") != "rollover_required":
+        raise RuntimeErrorWithCode(
+            "set context health to rollover_required before preparing rollover"
+        )
     research = state.get("research_runtime", {})
     active_luna = research.get("active_luna_tasks", []) if isinstance(research, dict) else []
     if active_luna:
@@ -233,7 +330,8 @@ def command_prepare(args: argparse.Namespace) -> dict[str, Any]:
     if brain.get("handoff_status") == "prepared":
         raise RuntimeErrorWithCode("a successor Brain is already pending")
 
-    brain["context_health"] = "rollover_required"
+    if not brain.get("rollover_reason"):
+        brain["rollover_reason"] = "observable_context_degradation"
     brain["pending_successor_generation"] = args.generation + 1
     brain["handoff_status"] = "prepared"
     research["state"] = "ROLLOVER_PREPARING"
@@ -260,6 +358,8 @@ def command_transfer(args: argparse.Namespace) -> dict[str, Any]:
     if args.successor_task_id == brain.get("active_brain_task_id"):
         raise RuntimeErrorWithCode("successor task must differ from the old Brain task")
 
+    rollover_reason = brain.get("rollover_reason") or "observable_context_degradation"
+    source_context_compactions = context_compaction_count(brain)
     previous_task_id = brain.get("active_brain_task_id") or args.task_id
     lineage = transfer_lineage(
         brain,
@@ -273,6 +373,9 @@ def command_transfer(args: argparse.Namespace) -> dict[str, Any]:
     brain["active_brain_task_id"] = args.successor_task_id
     brain["pending_successor_generation"] = None
     brain["context_health"] = "healthy"
+    brain["context_compaction_count"] = 0
+    brain["context_compaction_event_ids"] = []
+    brain["rollover_reason"] = None
     brain["rollover_count"] = int(brain.get("rollover_count", 0)) + 1
     brain["handoff_status"] = "transferred"
     research = state["research_runtime"]
@@ -285,6 +388,8 @@ def command_transfer(args: argparse.Namespace) -> dict[str, Any]:
         "active_generation": pending,
         "previous_task_id": previous_task_id,
         "active_task_id": args.successor_task_id,
+        "rollover_reason": rollover_reason,
+        "source_context_compactions": source_context_compactions,
         "brain_task_lineage": lineage,
     }
 
@@ -353,7 +458,13 @@ def build_parser() -> argparse.ArgumentParser:
     context = subparsers.add_parser("set-context-health")
     ownership(context)
     context.add_argument("--health", choices=sorted(CONTEXT_HEALTH), required=True)
+    context.add_argument("--reason")
     context.set_defaults(handler=command_set_context)
+
+    compaction = subparsers.add_parser("record-context-compaction")
+    ownership(compaction)
+    compaction.add_argument("--event-id")
+    compaction.set_defaults(handler=command_record_compaction)
 
     prepare = subparsers.add_parser("prepare-rollover")
     ownership(prepare)

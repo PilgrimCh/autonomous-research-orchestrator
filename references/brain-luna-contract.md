@@ -38,6 +38,8 @@ assignment:
   repair_authority:
     allowed: [<execution-preserving repairs>]
     forbidden: [<scientific or authorization changes>]
+    debug_cycle_limit: 3
+    required_sequence: [reproduce, minimize, diagnose, repair, targeted_validate, resume_original_experiment]
   stopping_rule: <completion/boundary rule>
 ```
 
@@ -47,13 +49,18 @@ Use experiment IDs, paths, dataset names/versions, row or sample counts, target 
 
 Require Luna to solve routine execution problems rather than merely report them. Permit path fixes, dependency/environment repair, parsing/serialization repair, Windows file-lock recovery, transient retry, checkpoint resume, invalid intermediate regeneration, deterministic implementation fixes, and targeted reruns when scientific semantics remain frozen.
 
-For one local issue, normally allow:
+An execution blocker is not scientific evidence. It does not support a negative result, route pruning, or a pivot. When the original idea remains decision-relevant, require a hypothesis-preserving debug loop under the same frozen scientific contract:
 
 ```text
-1 diagnosis + 1 repair + 1 targeted validation
+reproduce -> minimize -> identify root cause -> repair -> targeted validation
+          -> resume the original experiment -> obtain an interpretable result
 ```
 
-If the issue remains, return decision-ready evidence to Brain so Brain can bypass, simplify, redesign, or pivot. Do not turn a minor defect into an audit chain.
+Default to as many as three bounded debug cycles inside the task ceiling. A failed first repair is a new diagnostic observation, not permission to skip the task. Prefer a minimal reproducer, a known-good baseline, dependency/environment isolation, checkpoint recovery, and then a clean semantics-equivalent reimplementation of the failing component. Never "fix" the task by removing the component, comparison, data, metric, or mechanism needed to test the idea.
+
+After each repair, run the smallest check that can falsify the proposed root cause. A repair-only unit test is not enough: Luna must resume the original experiment or its decision-equivalent minimal test before returning a scientific status. If the blocker remains after the bounded cycles, return `blocked` or `invalid`, preserve the reproducer/logs/attempts, state the narrow unresolved root cause, and propose the cheapest next unblock action. Never translate an unresolved execution blocker into `negative` or `inconclusive` scientific evidence.
+
+When a blocked task tests a central or high-decision-value idea and global budget remains, Brain normally dispatches one focused follow-up debug assignment or a clean known-good reimplementation before considering a bypass. Brain may park the task only after recording why further debugging has lower decision value than the alternative, what was actually tried, and how to resume it. The idea remains unanswered, not refuted.
 
 Luna must return to Brain before changing the goal, research question, estimand, main comparison, provider/model/data boundary, sample definition, primary metric, success criterion, hard resource ceiling, or authorization scope.
 
@@ -81,6 +88,14 @@ Default to one concise `result.json`:
   "sanity_check": {"status": "pass | qualified | fail", "details": "<brief>"},
   "deviations": [],
   "repairs": [],
+  "debug": {
+    "encountered": false,
+    "failure_class": null,
+    "attempts": [],
+    "root_cause": null,
+    "resolved": null,
+    "original_experiment_resumed": true
+  },
   "resource_use": {},
   "artifacts": [],
   "claim_boundary": "<narrow execution-side statement>",
@@ -88,5 +103,7 @@ Default to one concise `result.json`:
   "brain_decision_needed": "<specific interpretation or replan question>"
 }
 ```
+
+When `debug.encountered` is true, record each attempt with its reproduction, diagnosis, repair, and targeted-validation outcome. A `success | negative | mixed | inconclusive` status is valid only when `debug.resolved` and `debug.original_experiment_resumed` are both true.
 
 Brain first requires an accepted CLI `run.json`, then inspects the decision-critical fields/artifacts, decides the scientific meaning, updates shared records, and immediately chooses the next stage. Luna never writes `task_plan.md`, `findings.md`, `progress.md`, `pipeline_state.json`, or `brain_handoff.md`.

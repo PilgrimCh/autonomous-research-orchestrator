@@ -46,7 +46,9 @@ flowchart LR
 | 连续重规划 | 一个阶段结束只是状态转移，不会自动停下来等用户续写提示词。 |
 | 小型路线组合 | 用 `scout / focus / confirm` 控制探索深度，拒绝盲目笛卡尔积搜索。 |
 | Brain–worker 分工 | 科学判断由 Brain 持有，证据生产交给经过身份验证的 Luna worker。 |
-| 持久运行时 | 目标、发现、预算、活动任务和 Brain 谱系在上下文 rollover 后继续存在。 |
+| 保留假设的自动 debug | 执行阻塞默认获得最多三轮修复，不能被伪装成 idea 的负结果。 |
+| 确定性 rollover | 第一次平台上下文压缩建议轮换，第二次强制轮换并交给唯一 successor Brain。 |
+| 持久运行时 | 目标、发现、预算、活动任务、压缩计数和 Brain 谱系在 rollover 后继续存在。 |
 | Goal Mode | 连续的小修小补没有信息价值时，先提升抽象层级重构研究方向。 |
 | 明确授权 | 默认只做有限的本地工作，不推断外部调用、付费、上传或破坏性权限。 |
 
@@ -96,7 +98,7 @@ python "$env:USERPROFILE\.codex\skills\autonomous-research-orchestrator\scripts\
 | `progress.md` | 当前工作、活动路线、资源使用和真实阻塞。 |
 | `artifacts/orchestration/pipeline_state.json` | 预算、worker、路线、状态及只追加的 Brain 谱系。 |
 | `artifacts/orchestration/brain_handoff.md` | 当前唯一的紧凑 rollover handoff；不替代历史任务。 |
-| `result.json` | 每个普通实验的默认局部证据契约。 |
+| `result.json` | 局部证据，以及 debug 尝试、根因、是否修复和原实验是否恢复。 |
 
 ## 安全与授权边界
 

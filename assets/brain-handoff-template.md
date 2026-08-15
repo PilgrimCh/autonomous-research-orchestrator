@@ -8,6 +8,8 @@ brain_handoff:
   to_brain_generation: <n+1>
   to_brain_task_id: <fill-after-successor-creation>
   predecessor_transcript: retained-unarchived-in-codex
+  rollover_reason: <second_context_compaction-or-other-observable-degradation>
+  context_compactions_observed_in_source_brain: <count>
   project_goal: <goal>
   current_goal_status: unresolved | complete | infeasible
   current_high_level_formulation: <compact formulation>
