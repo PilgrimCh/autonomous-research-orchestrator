@@ -46,7 +46,9 @@ flowchart LR
 | Continuous replanning | A stage ending is a transition, not an automatic stopping point. |
 | Small route portfolio | Scout, focus, and confirmation routes stay bounded; blind grid search is rejected. |
 | Brain–worker separation | Scientific policy stays with Brain; evidence production stays with the verified Luna worker. |
-| Persistent runtime | Goals, findings, budgets, active work, and Brain lineage survive context rollover. |
+| Hypothesis-preserving debug | Execution blockers receive up to three bounded repair cycles and cannot masquerade as negative evidence. |
+| Deterministic rollover | The first platform compaction recommends rollover; the second requires it and transfers to one successor Brain. |
+| Persistent runtime | Goals, findings, budgets, active work, compaction state, and Brain lineage survive context rollover. |
 | Goal Mode | Repeated inconclusive tweaks trigger a higher-level reformulation before infeasibility is declared. |
 | Explicit authorization | Local finite work is the default; external calls, costs, uploads, and destructive actions are never inferred. |
 
@@ -99,7 +101,7 @@ The runtime keeps a deliberately small authoritative surface:
 | `progress.md` | Current work, active route, resource use, and true blockers. |
 | `artifacts/orchestration/pipeline_state.json` | Machine state, budgets, workers, routes, and append-only Brain lineage. |
 | `artifacts/orchestration/brain_handoff.md` | One compact current rollover handoff—not a replacement for task history. |
-| `result.json` | Default task-local evidence contract for each experiment. |
+| `result.json` | Task-local evidence plus explicit debug attempts, root cause, resolution, and experiment-resume status. |
 
 ## Safety and authorization
 

@@ -21,16 +21,31 @@ Omit `--task-id` only when the platform cannot expose the current task ID. Gener
 
 ## Context health
 
-Use `healthy`, `rollover_recommended`, or `rollover_required`. Prefer observable signals over token accounting:
+Use `healthy`, `rollover_recommended`, or `rollover_required`. Context health is monotonic within one Brain generation and resets only after ownership transfers to its successor.
 
-- one or more clear compactions, especially repeated compaction;
-- repeated rereads needed to recover recently active goal/route/result/budget/authorization state;
-- conflict between superseded details and current authoritative state;
-- uncertainty about the latest result, active work, or next action;
-- many stages and large historical detail when a compact state is sufficient;
-- rising risk that more context will degrade scientific judgment.
+Treat a platform-created conversation compaction/automatic summary as an observable event. Count it exactly once when the current Brain first sees the compacted context:
 
-Do not rollover every stage. Prefer an early clean rollover once degradation is material.
+```powershell
+python scripts/runtime_control.py record-context-compaction `
+  --root "<project-root>" `
+  --generation <n> `
+  --task-id "<current-task-id>" `
+  --event-id "<platform-event-id-if-available>"
+```
+
+Use a platform event ID when available so retrying the command is idempotent. If the platform exposes no ID, omit it and invoke the command exactly once. Count only a new platform compaction of the active Brain task—not a handoff, a user summary, a reread, or a summary written by Brain itself. Never infer unobserved historical compactions.
+
+Apply this deterministic ladder per Brain generation:
+
+| New compactions observed | Required state | Action |
+|---|---|---|
+| 0 | `healthy` unless another degradation signal is stronger | Continue normally. |
+| 1 | at least `rollover_recommended` | Continue useful work but favor a clean boundary and keep authoritative records current. |
+| 2 | `rollover_required` | Dispatch no new scientific task; finish the active Luna safely, write the handoff, and roll over. |
+
+The second compaction is a hard rollover trigger, not merely a suggestion. Other observable signals may require an earlier rollover: repeated rereads to recover recently active state, conflict between superseded details and current records, uncertainty about the latest result/active work/authorization, or a concrete risk that context degradation is changing scientific judgment. Raise health explicitly with `set-context-health --health rollover_required --reason "<observable reason>"`.
+
+Do not rollover every stage. Do not reset or lower the compaction count because Brain reread the state successfully. Transfer resets the successor to zero compactions and `healthy`.
 
 ## Compact handoff
 
@@ -53,7 +68,7 @@ The successor normally reads only the compact handoff and minimal project record
 Prefer rollover at a boundary with no active Luna CLI process. If Luna is running, let that exact process or shell cell reach a safe completion point and record the result; do not cancel, duplicate, or attempt to migrate it into another Brain.
 
 1. Old Brain stops dispatching new scientific work.
-2. Old Brain writes the compact handoff with its own generation/task ID and persists all current results/budgets.
+2. Old Brain writes the compact handoff with its own generation/task ID, `rollover_reason`, observed source-generation compaction count, and all current results/budgets.
 3. Old Brain runs:
 
    ```powershell

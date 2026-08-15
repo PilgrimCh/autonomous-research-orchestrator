@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from run_luna_worker import validate_result as validate_luna_result
+
 
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 ASSETS = SKILL_ROOT / "assets"
@@ -126,6 +128,34 @@ def validate_initializer_and_migration() -> dict[str, bool]:
                 "successor_task_id": None,
             }
         ]
+        for key in (
+            "context_compaction_count",
+            "context_compaction_event_ids",
+            "rollover_reason",
+        ):
+            initialized["brain_runtime"].pop(key, None)
+        save(root / "artifacts" / "orchestration" / "pipeline_state.json", initialized)
+        compatibility = run_runtime(
+            root,
+            "record-context-compaction",
+            "--generation",
+            "1",
+            "--task-id",
+            "new-init-brain-1",
+            "--event-id",
+            "old-v4-first-compaction",
+        )
+        compatibility_validation = subprocess.run(
+            [sys.executable, str(VALIDATOR), "--root", str(root), "--json"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        checks["older_v4_compaction_defaults_are_compatible"] = (
+            compatibility["context_compaction_count"] == 1
+            and compatibility["context_health"] == "rollover_recommended"
+            and compatibility_validation.returncode == 0
+        )
 
     with tempfile.TemporaryDirectory(prefix="autonomous-migration-test-") as temporary:
         root = Path(temporary)
@@ -219,6 +249,7 @@ def record_result(
     result_status: str,
     primary_result: dict[str, Any],
     repairs: list[str] | None = None,
+    debug: dict[str, Any] | None = None,
 ) -> Path:
     state = load(state_path)
     research = state["research_runtime"]
@@ -251,6 +282,15 @@ def record_result(
         "sanity_check": {"status": "pass", "details": "targeted check only"},
         "deviations": [],
         "repairs": repairs or [],
+        "debug": debug
+        or {
+            "encountered": False,
+            "failure_class": None,
+            "attempts": [],
+            "root_cause": None,
+            "resolved": None,
+            "original_experiment_resumed": True,
+        },
         "resource_use": {"wall_minutes": 5, "worker_assignments": 1},
         "artifacts": [],
         "claim_boundary": f"Only {experiment_id} under the mock configuration.",
@@ -295,12 +335,43 @@ def simulate(root: Path) -> dict[str, Any]:
         "route-a",
         "inconclusive",
         {"signal": "too noisy"},
-        repairs=["Luna repaired a deterministic parser error and reran only the invalid unit"],
+        repairs=["Luna repaired a deterministic parser error and resumed exp-001"],
+        debug={
+            "encountered": True,
+            "failure_class": "execution_parser_failure",
+            "attempts": [
+                {
+                    "cycle": 1,
+                    "reproduction": "minimal malformed row reproduced the crash",
+                    "diagnosis": "initial delimiter hypothesis",
+                    "repair": "normalized delimiter handling",
+                    "targeted_validation": "failed on quoted delimiter",
+                },
+                {
+                    "cycle": 2,
+                    "reproduction": "quoted delimiter isolated",
+                    "diagnosis": "state machine mishandled escaped quotes",
+                    "repair": "fixed escaped-quote transition",
+                    "targeted_validation": "pass",
+                },
+            ],
+            "root_cause": "escaped-quote transition in deterministic parser",
+            "resolved": True,
+            "original_experiment_resumed": True,
+        },
     )
     state = load(state_path)
     state["research_runtime"]["next_action"] = "modify_route_a_and_dispatch_stage_002"
     save(state_path, state)
-    events.append({"stage": 1, "decision": "inconclusive -> automatic replan", "user_wakeup": False})
+    events.append(
+        {
+            "stage": 1,
+            "execution_blocker": "debugged for two cycles",
+            "original_experiment_resumed": True,
+            "decision": "scientific result interpreted only after repair",
+            "user_wakeup": False,
+        }
+    )
 
     record_result(
         root,
@@ -352,10 +423,49 @@ def simulate(root: Path) -> dict[str, Any]:
         "action": "promote",
         "reason": "promising scout result",
     }
-    state["research_runtime"]["next_action"] = "rollover_then_focus_route_b"
-    state["brain_runtime"]["context_health"] = "rollover_required"
+    state["research_runtime"]["next_action"] = "record_compaction_events_then_rollover"
     save(state_path, state)
     events.append({"stage": 3, "decision": "promote route-b and rollover", "session_stop": False})
+
+    first_compaction = run_runtime(
+        root,
+        "record-context-compaction",
+        "--generation",
+        "1",
+        "--task-id",
+        "dryrun-brain-1",
+        "--event-id",
+        "dryrun-compaction-1",
+    )
+    duplicate_compaction = run_runtime(
+        root,
+        "record-context-compaction",
+        "--generation",
+        "1",
+        "--task-id",
+        "dryrun-brain-1",
+        "--event-id",
+        "dryrun-compaction-1",
+    )
+    second_compaction = run_runtime(
+        root,
+        "record-context-compaction",
+        "--generation",
+        "1",
+        "--task-id",
+        "dryrun-brain-1",
+        "--event-id",
+        "dryrun-compaction-2",
+    )
+    events.append(
+        {
+            "runtime": "context compaction policy",
+            "first_health": first_compaction["context_health"],
+            "duplicate_ignored": duplicate_compaction["status"] == "duplicate",
+            "second_health": second_compaction["context_health"],
+            "hard_rollover_triggered": second_compaction["rollover_required"],
+        }
+    )
 
     handoff = root / "artifacts" / "orchestration" / "brain_handoff.md"
     handoff.write_text(
@@ -366,6 +476,8 @@ def simulate(root: Path) -> dict[str, Any]:
         "to_brain_generation: 2\n"
         "to_brain_task_id: dryrun-brain-2\n"
         "predecessor_transcript: retained-unarchived-in-codex\n"
+        "rollover_reason: second_context_compaction\n"
+        "context_compactions_observed_in_source_brain: 2\n"
         "project_goal: Find a robust mock method that improves the target outcome.\n"
         "accepted_findings_that_matter_now: route-a failed narrowly; route-b is promising.\n"
         "current_active_route: route-b\n"
@@ -440,6 +552,15 @@ def simulate(root: Path) -> dict[str, Any]:
 
     final_state = load(state_path)
     result_files = sorted(root.glob("artifacts/orchestration/results/*/result.json"))
+    runner_contracts_valid = all(validate_luna_result(path)[0] for path in result_files)
+    invalid_debug_probe = load(result_files[0])
+    invalid_debug_probe["status"] = "negative"
+    invalid_debug_probe["debug"]["resolved"] = False
+    invalid_debug_probe["debug"]["original_experiment_resumed"] = False
+    invalid_debug_path = root / "invalid-debug-result.json"
+    save(invalid_debug_path, invalid_debug_probe)
+    invalid_debug_rejected = not validate_luna_result(invalid_debug_path)[0]
+    invalid_debug_path.unlink()
     prohibited_artifacts = list(root.rglob("*audit*")) + list(root.rglob("experiment_report.md"))
     generated_text = "\n".join(
         path.read_text(encoding="utf-8", errors="ignore")
@@ -473,6 +594,13 @@ def simulate(root: Path) -> dict[str, Any]:
         "route_failure_replanned": final_state["research_runtime"]["route_states"]["route-a"]["status"] == "pruned",
         "goal_mode_rebuilt_portfolio": "route-b" in final_state["research_runtime"]["route_states"],
         "ordinary_bug_repaired_by_luna": bool(load(result_files[0])["repairs"]),
+        "debug_used_multiple_cycles": len(load(result_files[0])["debug"]["attempts"]) == 2,
+        "debug_resumed_original_experiment": load(result_files[0])["debug"][
+            "original_experiment_resumed"
+        ]
+        is True,
+        "runner_accepts_complete_debug_contracts": runner_contracts_valid,
+        "runner_rejects_scientific_result_before_debug_resolution": invalid_debug_rejected,
         "brain_did_not_execute_evidence_work": all(
             load(path)["brain_executed_evidence_work"] is False for path in result_files
         ),
@@ -485,6 +613,18 @@ def simulate(root: Path) -> dict[str, Any]:
         "minimal_result_artifacts": len(result_files) == 4,
         "session_goal_budget_authorization_preserved": rollover_preserved,
         "rollover_not_scientific_stage": after_rollover["research_runtime"]["stage_count"] == 3,
+        "first_compaction_recommends_rollover": first_compaction["context_compaction_count"] == 1
+        and first_compaction["context_health"] == "rollover_recommended",
+        "duplicate_compaction_is_idempotent": duplicate_compaction["status"] == "duplicate"
+        and duplicate_compaction["context_compaction_count"] == 1,
+        "second_compaction_requires_rollover": second_compaction["context_compaction_count"] == 2
+        and second_compaction["context_health"] == "rollover_required"
+        and second_compaction["rollover_reason"] == "second_context_compaction",
+        "successor_compaction_counter_reset": after_rollover["brain_runtime"][
+            "context_compaction_count"
+        ]
+        == 0
+        and after_rollover["brain_runtime"]["context_compaction_event_ids"] == [],
         "completed_experiments_not_replayed": len(final_state["research_runtime"]["completed_experiment_ids"])
         == len(set(final_state["research_runtime"]["completed_experiment_ids"])),
         "one_active_brain": final_state["brain_runtime"]["active_brain_generation"] == 2

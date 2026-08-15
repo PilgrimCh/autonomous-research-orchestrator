@@ -23,9 +23,10 @@ REQUIRED_ASSIGNMENT_KEYS = {
 }
 REQUIRED_RESULT_KEYS = {
     "experiment_id", "status", "executed", "primary_results", "sanity_check",
-    "deviations", "repairs", "resource_use", "artifacts", "claim_boundary",
+    "deviations", "repairs", "debug", "resource_use", "artifacts", "claim_boundary",
     "limitations", "brain_decision_needed",
 }
+RESULT_STATUS = {"success", "negative", "mixed", "inconclusive", "invalid", "blocked"}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -154,8 +155,16 @@ Hard requirements:
 - Write only within assignment.write_scope.
 - Do not reveal or copy secrets.
 - Stop at the stated stopping_rule and resource_ceiling.
+- Treat an execution blocker as a debug task, not as negative evidence about the idea.
+- For allowed execution failures, follow repair_authority through bounded reproduce, minimize,
+  diagnose, repair, targeted-validation, and original-experiment-resume cycles. Do not stop at
+  the first failed repair and do not bypass a broken decisive component by removing it.
 - Write the final machine-readable result to: {result_path}
 - result.json must contain these keys: {', '.join(sorted(REQUIRED_RESULT_KEYS))}.
+- Record every encountered execution blocker in result.debug, including attempts, root cause,
+  whether it was resolved, and whether the original experiment actually resumed.
+- If no blocker occurred, use debug={{"encountered": false, "attempts": []}}. If one occurred,
+  also provide failure_class, root_cause, resolved, and original_experiment_resumed.
 - If execution cannot proceed, still write a bounded failure result when possible.
 
 Task ID: {assignment['task_id']}
@@ -172,7 +181,44 @@ def validate_result(path: Path) -> tuple[bool, list[str]]:
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return False, [f"Invalid result JSON: {exc}"]
     missing = sorted(REQUIRED_RESULT_KEYS - result.keys())
-    return (not missing), ([f"Missing result keys: {', '.join(missing)}"] if missing else [])
+    errors = [f"Missing result keys: {', '.join(missing)}"] if missing else []
+    status = result.get("status")
+    if status not in RESULT_STATUS:
+        errors.append("Invalid result status")
+    debug = result.get("debug")
+    if not isinstance(debug, dict):
+        errors.append("debug must be an object")
+        return False, errors
+    encountered = debug.get("encountered")
+    attempts = debug.get("attempts")
+    if not isinstance(encountered, bool):
+        errors.append("debug.encountered must be boolean")
+    if not isinstance(attempts, list):
+        errors.append("debug.attempts must be a list")
+        attempts = []
+    if encountered is False and attempts:
+        errors.append("debug.attempts must be empty when no blocker was encountered")
+    if encountered is True:
+        if not attempts:
+            errors.append("an encountered blocker requires at least one debug attempt")
+        if not isinstance(debug.get("failure_class"), str) or not debug.get("failure_class"):
+            errors.append("an encountered blocker requires debug.failure_class")
+        if not isinstance(debug.get("root_cause"), str) or not debug.get("root_cause"):
+            errors.append("an encountered blocker requires debug.root_cause")
+        if not isinstance(debug.get("resolved"), bool):
+            errors.append("an encountered blocker requires boolean debug.resolved")
+        if not isinstance(debug.get("original_experiment_resumed"), bool):
+            errors.append(
+                "an encountered blocker requires boolean debug.original_experiment_resumed"
+            )
+        if status in {"success", "negative", "mixed", "inconclusive"} and (
+            debug.get("resolved") is not True
+            or debug.get("original_experiment_resumed") is not True
+        ):
+            errors.append(
+                "a scientific result is invalid until the blocker is resolved and the original experiment resumes"
+            )
+    return not errors, errors
 
 
 def main() -> int:
