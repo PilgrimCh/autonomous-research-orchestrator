@@ -1,107 +1,72 @@
-# Runtime and Brain Rollover
+# Runtime control and compact Brain handoff
 
-## Authoritative runtime
+Schema v4 separates session authority/resources, Brain ownership/context, research work, and integrity. Preserve existing state; do not reinitialize to adopt these changes. The state governs control, while retained Codex tasks hold full transcripts.
 
-Use schema v4 to separate:
-
-- `autonomy_session`: session identity, project goal/status, cumulative limits/use/remaining, standing authorization;
-- `brain_runtime`: active and previous generations/task IDs, append-only Brain task lineage, context health, rollover status/count, handoff path;
-- `research_runtime`: session state, active stage/routes/experiments/Luna tasks, completed experiments, next action;
-- `integrity_runtime`: invalidated artifacts and unresolved integrity issues.
-
-The research session crosses stages and Brain tasks. The state file—not conversational memory—is authoritative for research control, while each retained Codex task remains the authoritative full transcript for that Brain generation.
-
-Before every scientific decision, Luna CLI launch, or shared record/state write, run:
+## Read and dispatch
 
 ```powershell
-python scripts/runtime_control.py assert-active --root "<project-root>" --generation <n> --task-id "<current-task-id>"
+python scripts/runtime_control.py snapshot --root "<root>"
+python scripts/runtime_control.py assert-active --root "<root>" --generation <n> --task-id "<Brain-id>"
+python scripts/runtime_control.py assert-dispatch --root "<root>" --generation <n> --task-id "<Brain-id>"
 ```
 
-Omit `--task-id` only when the platform cannot expose the current task ID. Generation remains mandatory. A stale Brain must stop immediately without spawning or writing.
+Snapshot is read-only and compact: current ownership, effective control/policy with source, resources, active work and record pointers. Query full state only for an unresolved authorization, protected identity or provenance question.
+
+`assert-active` checks ownership for maintenance, accounting and acceptance, including while paused. A stale Brain stops shared writes and spawning. `assert-dispatch` additionally requires RUNNING, a usable context, no unresolved budget overrun, and current main documents after record adoption. Refresh documents automatically when stale. It does not itself launch work or replace transport-specific authorization and resource reservation.
+
+An absent legacy `control_mode` is inferred from the existing stop/terminal markers. The session's `enabled` flag is not permission to resume after a user stop. Effective transport policy prefers current typed policy over recognized prior user authorization over old defaults; preserve each authorization's scope. Unrecognized prose is not automatically parsed into permission. Resolve an applicable explicit instruction into typed policy with its source before dependent actions.
+
+## Pause and explicit resume
+
+```powershell
+python scripts/runtime_control.py pause --root "<root>" --generation <n> --task-id "<Brain-id>" --mode PAUSED_USER --reason "<user stop>"
+python scripts/runtime_control.py resume --root "<root>" --generation <n> --task-id "<Brain-id>"
+```
+
+Run `resume` only for explicit user resumption, or for a non-user pause whose existing authorized unblock condition has actually been satisfied. Never infer resumption from skill editing, history maintenance, review, compaction or ownership transfer. A user-pause latch requires explicit user resume even if a later platform/review pause was also recorded.
+
+Pause blocks new dispatch while preserving an active worker's identity. Drain or interrupt according to the user's stop instruction; receipt acceptance, cost settlement and records may finish. Never launch replacement work as part of draining. PAUSED_PLATFORM and PAUSED_REVIEW carry their actual unblock condition; TERMINAL cannot resume by this command.
+
+## Cumulative resource accounting
+
+For every new dispatch reserve finite amounts under a stable work/attempt key:
+
+```powershell
+python scripts/runtime_control.py reserve-budget --root "<root>" --generation <n> --task-id "<Brain-id>" --idempotency-key "<work-attempt-id>" --wall-minutes 20 --worker-assignments 1 --external-calls 0 --external-cost-usd 0
+python scripts/runtime_control.py finalize-budget --root "<root>" --generation <n> --task-id "<Brain-id>" --idempotency-key "<work-attempt-id>" --wall-minutes 12 --worker-assignments 1 --external-calls 0 --external-cost-usd 0
+```
+
+Settlement arguments are actual amounts, not deltas. Repeating an identical operation must not double-charge. Active reservations reduce available capacity. Uncertain execution keeps a conservative charge (`--uncertain`); after inspecting execution evidence, use `reconcile-budget` with the same owner/idempotency key and confirmed actual amount flags to replace that charge exactly once. Never declare zero usage because a request timed out. Unexpected actual overrun stays recorded and blocks further dispatch for review. Legacy `record-budget` remains available for old unreserved accounting; do not also use it for a reserved task.
+
+State mutations use an operating-system exclusive lock, re-read under lock and atomic replacement. The lock releases when the process exits; the remaining lock file is not proof of an active writer. Document publication uses its own exclusive marker: after a crash verify no publisher remains before removing that stale marker. Never blindly steal a live lock.
 
 ## Context health
 
-Use `healthy`, `rollover_recommended`, or `rollover_required`. Context health is monotonic within one Brain generation and resets only after ownership transfers to its successor.
-
-Treat a platform-created conversation compaction/automatic summary as an observable event. Count it exactly once when the current Brain first sees the compacted context:
+Count each newly observed platform compaction exactly once:
 
 ```powershell
-python scripts/runtime_control.py record-context-compaction `
-  --root "<project-root>" `
-  --generation <n> `
-  --task-id "<current-task-id>" `
-  --event-id "<platform-event-id-if-available>"
+python scripts/runtime_control.py record-context-compaction --root "<root>" --generation <n> --task-id "<Brain-id>" --event-id "<observed-platform-event-id>"
 ```
 
-Use a platform event ID when available so retrying the command is idempotent. If the platform exposes no ID, omit it and invoke the command exactly once. Count only a new platform compaction of the active Brain task—not a handoff, a user summary, a reread, or a summary written by Brain itself. Never infer unobserved historical compactions.
+If the platform exposes no event ID, omit it and invoke once for that observed event. Do not count user summaries, handoffs, rereads or invented historical compactions. Context health is monotonic within a generation. One compaction recommends a clean boundary; `brain_runtime.rollover_threshold` determines the hard trigger (default 2). A generation-specific amendment applies only to its stated generation; it is not automatically global policy.
 
-Apply this deterministic ladder per Brain generation:
+Observable degradation can require an earlier rollover using `set-context-health --health rollover_required --reason "<evidence>"`. At the hard trigger dispatch no new science, finish current authorized work safely, update records and prepare handoff. Do not create a stage for rollover. Do not lower the count by rereading state.
 
-| New compactions observed | Required state | Action |
-|---|---|---|
-| 0 | `healthy` unless another degradation signal is stronger | Continue normally. |
-| 1 | at least `rollover_recommended` | Continue useful work but favor a clean boundary and keep authoritative records current. |
-| 2 | `rollover_required` | Dispatch no new scientific task; finish the active Luna safely, write the handoff, and roll over. |
+## Transfer protocol
 
-The second compaction is a hard rollover trigger, not merely a suggestion. Other observable signals may require an earlier rollover: repeated rereads to recover recently active state, conflict between superseded details and current records, uncertainty about the latest result/active work/authorization, or a concrete risk that context degradation is changing scientific judgment. Raise health explicitly with `set-context-health --health rollover_required --reason "<observable reason>"`.
+Keep one compact `artifacts/orchestration/brain_handoff.md`, using the template. Include goal and current formulation, the relevant preceding result, next question/reason, latest artifact, source/successor identities, control mode and saved action, effective authority/source, remaining resources/reservations, active workers, protected boundaries and history pointer. Do not paste long history or every ledger.
 
-Do not rollover every stage. Do not reset or lower the compaction count because Brain reread the state successfully. Transfer resets the successor to zero compactions and `healthy`.
+1. Reach a safe boundary with no active worker that would be lost or duplicated. The old Brain stops dispatch.
+2. Write the compact handoff, including any user pause and the instruction to preserve it.
+3. Run `prepare-rollover --root "<root>" --generation <n> --task-id "<Brain-id>"`.
+4. Create a successor only when the user has explicitly requested automatic successor tasks (including an applicable standing request), the host allows it, and project policy permits rollover. Merely invoking this skill or finding `brain_rollover: true` is not a substitute for the user request required by the host tool. Do not request permission again when that request is already established. Resolve the saved project and use the same local research root, with a compact starting prompt.
+5. Preserve predecessor and successor as separate readable, unarchived tasks in the project. Rename for clarity if available. Keep append-only `brain_task_lineage`; do not invent unknown historical task IDs.
+   For the authorized successor creation, explicitly pass `model: "gpt-6-astra"`; preserve the user's reasoning-effort setting and verify the returned task configuration. Record the intended Brain model in the handoff. If Astra is unavailable, report that concrete platform limitation rather than silently substituting another Brain model.
+6. The successor waits until state names its generation and task as active. After creation returns a real task ID, update the handoff and run:
 
-## Compact handoff
+   `transfer-brain --root "<root>" --generation <n> --task-id "<Brain-id>" --successor-task-id "<new-task-id>"`
+7. Old Brain ends shared writes/decisions after transfer. Successor asserts ownership, reads snapshot, compact handoff, three main documents and latest required result. It dispatches only if the preserved control mode and authority permit; paused research stays paused.
 
-Overwrite the single `artifacts/orchestration/brain_handoff.md`. Include only the source and successor generations/task IDs, project goal/status, formulation, accepted findings that matter now, active route, latest result, direction rationale, unresolved questions, next action, running Luna tasks, authorization, remaining global budget, forbidden actions, invalidated/superseded work, and immediate resume instruction.
+Transfer preserves session goal/status, authority, budgets, reservations, scientific stage count, results, protected/invalidated identities and predecessor transcripts. Ownership generation and rollover count advance; successor context count resets. A paused session retains the saved next action rather than being forced to RUNNING.
 
-Do not copy chat history, long reasoning, every old experiment, or a handoff archive. Do not audit or hash the handoff. Compression controls what the successor loads; it does not replace, delete, or hide the predecessor's Codex transcript.
-
-## Conversation preservation invariant
-
-Keep every predecessor Brain task unarchived and readable in the same saved Codex project. Never call `set_thread_archived`, delete a task, move it out of the project, or reuse it as the successor during automatic rollover. Before transfer, give the predecessor a stable title such as `[History] <project-title> — Brain <n>` and create the successor with `<project-title> — Brain <n+1> (Active)`.
-
-Maintain `brain_runtime.brain_task_lineage` as append-only metadata. Each entry records generation, task ID, `active | retired` status, predecessor task ID, and successor task ID. Transfer changes the current entry from `active` to `retired` and appends exactly one new `active` entry; it never removes an older entry. The existing `previous_brain_*` fields remain a convenience pointer, not the historical record.
-
-For an older schema-v4 state created before lineage existed, seed the known predecessor from `previous_brain_*` and the current Brain on the next transfer. Preserve only task IDs established by state or native thread metadata; never invent missing earlier generations.
-
-The successor normally reads only the compact handoff and minimal project records. It may verify the predecessor task ID/title through native thread metadata without loading the old transcript. Read the old transcript only when the user asks or when a concrete recovery, provenance, or contradiction investigation requires it.
-
-## Safe transfer protocol
-
-Prefer rollover at a boundary with no active Luna CLI process. If Luna is running, let that exact process or shell cell reach a safe completion point and record the result; do not cancel, duplicate, or attempt to migrate it into another Brain.
-
-1. Old Brain stops dispatching new scientific work.
-2. Old Brain writes the compact handoff with its own generation/task ID, `rollover_reason`, observed source-generation compaction count, and all current results/budgets.
-3. Old Brain runs:
-
-   ```powershell
-   python scripts/runtime_control.py prepare-rollover --root "<project-root>" --generation <n>
-   ```
-
-4. Resolve the saved Codex project with `list_projects`. Rename the predecessor to `[History] <project-title> — Brain <n>`. Create exactly one successor using native `create_thread` in the same saved project with `environment: local` and title `<project-title> — Brain <n+1> (Active)` so both generations remain visible and share the authoritative root. This successor is the sole allowed new top-level research task; it is not a Worker. User activation of an autonomy session with `brain_rollover: true` is the explicit request permitting it.
-5. Give the successor only the absolute project root, skill name, session ID, predecessor task ID, pending generation, state path, handoff path, and this instruction: wait until the state marks that generation active, then assert ownership, read minimal authoritative records, and resume the outer loop without user input.
-6. After `create_thread` returns the successor task ID, add it to the compact handoff, then atomically transfer ownership. `transfer-brain` retires the predecessor in append-only lineage and appends the successor:
-
-   ```powershell
-   python scripts/runtime_control.py transfer-brain --root "<project-root>" --generation <n> --successor-task-id "<thread-id>"
-   ```
-
-7. Old Brain performs no further scientific or shared-state action. Leave its task unarchived, emit the created-task link/directive and both task IDs in its final response, and end its turn. Retirement means loss of write authority only.
-8. Successor asserts generation `n+1`, verifies that state lineage names both tasks, reads `task_plan.md`, `findings.md`, `progress.md`, `pipeline_state.json`, `brain_handoff.md`, and only the latest needed result, then immediately resumes. Do not load the predecessor transcript merely to reconstruct state.
-
-The two-phase `prepared -> transferred` protocol makes a successor wait rather than race. The compare-and-set generation check prevents the retired Brain from writing after transfer.
-
-## Platform limitation fallback
-
-Native automatic rollover requires callable thread creation, title management, and a saved Codex project that can open the same local research root. Do not use a same-directory fork that copies the long conversation merely to simulate compact continuation. If title management is unavailable, preserve both task IDs and continue with platform-generated titles; visibility and lineage matter more than naming.
-
-If native creation is unavailable, complete the handoff/state machinery, set `ROLLOVER_PLATFORM_BLOCKED`, and report this single platform limitation accurately. Do not weaken the outer loop, reset the session, or pretend a new Brain was created.
-
-## Resume invariants
-
-Across rollover preserve exactly:
-
-- session ID, project goal/status, formulation, standing authorization;
-- global limits, used values, and remaining values;
-- route states, active/completed experiments, results, invalidations, active Luna identities;
-- every Brain generation/task ID in append-only lineage and every predecessor transcript;
-- stage count and next action.
-
-Increment only Brain generation and rollover count. Rollover is runtime maintenance and never a scientific stage.
+If native creation is unavailable or lacks an essential explicit user request, complete the compact handoff and record the exact limitation via `mark-platform-blocked` after preparation. Do not fork a long transcript to imitate compact continuation, reset the session or claim creation succeeded. Title management alone is optional: actual task IDs and readable history are essential.

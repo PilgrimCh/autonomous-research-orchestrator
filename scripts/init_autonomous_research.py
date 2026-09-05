@@ -112,6 +112,7 @@ def make_state(
     session = state["autonomy_session"]
     session["session_id"] = f"{args.project_id}-session-001"
     session["enabled"] = bool(args.enable_autonomy)
+    session["control_mode"] = "RUNNING" if args.enable_autonomy else "PAUSED_USER"
     session["project_goal"] = goal
     session["global_limits"] = limits
     session["global_budget_used"] = used
@@ -132,6 +133,9 @@ def make_state(
     old_project_state = old_state.get("state") or old_adapter.get("state")
     if old_project_state == "PROJECT_CLOSED":
         session["goal_status"] = "complete"
+        session["control_mode"] = "TERMINAL"
+    elif old_project_state in {"STOPPED_BY_USER", "PAUSED_USER"}:
+        session["control_mode"] = "PAUSED_USER"
 
     brain = state["brain_runtime"]
     brain["active_brain_task_id"] = args.brain_task_id
@@ -161,6 +165,9 @@ def make_state(
     if session["goal_status"] == "complete":
         research["state"] = "PROJECT_COMPLETE"
         research["next_action"] = "deliver_final_result"
+    elif session["control_mode"] == "PAUSED_USER":
+        research["state"] = "READY"
+        research["next_action"] = "await_explicit_user_resume"
     elif args.enable_autonomy:
         research["state"] = "RUNNING" if research["active_luna_tasks"] else "READY"
         research["next_action"] = "inspect_active_work" if research["active_luna_tasks"] else "inspect_goal_gap"
@@ -181,20 +188,29 @@ def main_documents(goal: str, title: str) -> dict[str, str]:
             f"## Project goal\n\n{goal}\n\n"
             "## Stable formulation\n\nTo be refined from accepted evidence.\n\n"
             "## Important constraints\n\nUse the recorded autonomy-session boundaries.\n\n"
-            "## Current high-level strategy\n\nIdentify and test the highest-value goal gap.\n"
+            "## Previous → current/next stage\n\nNo previous stage. Identify the highest-value goal gap.\n\n"
+            "Keep only adjacent-stage context; full process and contributions belong in research_history.md.\n"
         ),
         "findings.md": (
             "# Research Findings\n\n"
             "## Accepted evidence and bounded conclusions\n\nNone recorded yet.\n\n"
-            "## Important negative findings\n\nNone recorded yet.\n\n"
-            "## Unresolved scientific questions\n\nDerive from the project goal.\n"
+            "## Evidence needed for the next stage\n\nDerive from the project goal.\n\n"
+            "Older facts stay only when needed for the next decision; link full history.\n"
         ),
         "progress.md": (
             "# Research Progress\n\n"
             "## Current work\n\nInitialize the autonomous outer loop.\n\n"
-            "## Recent decision-relevant stages\n\nNone recorded yet.\n\n"
+            "## Previous stage and next action\n\nNone recorded yet.\n\n"
             "## Active route and resources\n\nSee `pipeline_state.json`.\n\n"
             "## True blockers\n\nNone.\n"
+        ),
+        "research_history.md": (
+            f"# Research history: {title}\n\n"
+            "No experimental work recorded yet. Existing work, if any, must be linked during adoption.\n\n"
+            "After each work item, publish the actual question, motivation, methods, actions, outcomes, "
+            "debug attempts, evidence boundaries, next decision, and user/agent/shared contribution attribution. "
+            "This record supports traceability and evidence-backed CV descriptions; infrastructure success "
+            "does not establish scientific impact. Do not load full history on ordinary resume.\n"
         ),
     }
 

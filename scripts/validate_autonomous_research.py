@@ -37,6 +37,21 @@ BUDGET_KEYS = (
     "external_calls",
     "external_cost_usd",
 )
+CONTROL_MODES = {
+    "RUNNING",
+    "PAUSED_USER",
+    "PAUSED_PLATFORM",
+    "PAUSED_REVIEW",
+    "TERMINAL",
+}
+PAUSED_CONTROL_MODES = {"PAUSED_USER", "PAUSED_PLATFORM", "PAUSED_REVIEW"}
+DEFAULT_ROLLOVER_THRESHOLD = 2
+LEGACY_USER_PAUSE_MARKERS = {
+    "STOPPED_BY_USER",
+    "AWAIT_USER_RESUME",
+    "AWAITING_USER_RESUME",
+    "PAUSED_USER",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,6 +102,158 @@ def require_object(value: Any, label: str, errors: list[str]) -> dict[str, Any]:
     return value
 
 
+def infer_control_mode(state: dict[str, Any]) -> str:
+    session = state.get("autonomy_session")
+    if isinstance(session, dict):
+        explicit = session.get("control_mode")
+        if isinstance(explicit, str) and explicit in CONTROL_MODES:
+            return explicit
+    research = state.get("research_runtime")
+    if isinstance(research, dict) and research.get("state") == "READY":
+        values = (
+            research.get("next_action"),
+            research.get("pause_marker"),
+            research.get("stop_reason"),
+            research.get("status"),
+            state.get("state"),
+        )
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            marker = value.strip().upper()
+            if marker in LEGACY_USER_PAUSE_MARKERS or (
+                "AWAIT" in marker and "USER" in marker and "RESUME" in marker
+            ):
+                return "PAUSED_USER"
+    return "RUNNING"
+
+
+def validate_control(
+    state: dict[str, Any],
+    session: dict[str, Any],
+    research: dict[str, Any],
+    errors: list[str],
+    warnings: list[str],
+) -> str:
+    raw = session.get("control_mode")
+    if raw is None:
+        mode = infer_control_mode(state)
+        if mode == "PAUSED_USER":
+            warnings.append(
+                "legacy READY/user-resume marker inferred control_mode=PAUSED_USER"
+            )
+    elif raw not in CONTROL_MODES:
+        errors.append("autonomy_session.control_mode is invalid")
+        mode = "RUNNING"
+    else:
+        mode = raw
+
+    latch = session.get("user_pause_latch")
+    if latch is not None and not isinstance(latch, bool):
+        errors.append("autonomy_session.user_pause_latch must be boolean")
+    if mode == "RUNNING" and latch is True:
+        errors.append("RUNNING control_mode cannot retain user_pause_latch")
+    if mode == "PAUSED_USER" and latch is False and raw is not None:
+        warnings.append("PAUSED_USER control_mode has a cleared user_pause_latch")
+
+    saved = session.get("saved_next_action")
+    if saved is not None and (not isinstance(saved, str) or not saved):
+        errors.append("autonomy_session.saved_next_action must be null or non-empty")
+    if mode in PAUSED_CONTROL_MODES:
+        active = research.get("active_luna_tasks")
+        if not isinstance(active, list):
+            errors.append("paused runtime must expose active_luna_tasks for draining")
+        marker = research.get("next_action")
+        if saved is None and isinstance(marker, str) and marker.lower().startswith("await_"):
+            warnings.append(
+                "paused runtime has no saved_next_action; resume will use the safe default"
+            )
+    if mode == "TERMINAL":
+        if research.get("active_luna_tasks"):
+            errors.append("TERMINAL control_mode cannot retain active Luna tasks")
+        if research.get("state") not in {
+            "PROJECT_COMPLETE",
+            "PROJECT_INFEASIBLE",
+            "INTEGRITY_STOP",
+            "GLOBAL_RESOURCE_EXHAUSTED",
+        }:
+            errors.append(
+                "TERMINAL control_mode requires a terminal research_runtime.state"
+            )
+    if raw in CONTROL_MODES and mode == "RUNNING":
+        marker = research.get("next_action")
+        if isinstance(marker, str) and (
+            marker.upper() in LEGACY_USER_PAUSE_MARKERS
+            or ("AWAIT" in marker.upper() and "USER" in marker.upper() and "RESUME" in marker.upper())
+        ):
+            errors.append("RUNNING control_mode conflicts with a user-resume marker")
+    return mode
+
+
+def rollover_threshold(brain: dict[str, Any], warnings: list[str]) -> int:
+    raw = brain.get("rollover_threshold")
+    if "rollover_after_observable_compactions" in brain:
+        warnings.append(
+            "legacy rollover_after_observable_compactions is ignored; "
+            "set explicit brain_runtime.rollover_threshold"
+        )
+    if raw is None:
+        return DEFAULT_ROLLOVER_THRESHOLD
+    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 1:
+        return DEFAULT_ROLLOVER_THRESHOLD
+    return raw
+
+
+def validate_transport_policy(session: dict[str, Any], errors: list[str]) -> None:
+    policy = session.get("transport_policy")
+    if policy is not None and not isinstance(policy, dict):
+        errors.append("autonomy_session.transport_policy must be an object")
+        return
+    if not isinstance(policy, dict):
+        return
+    for key in (
+        "native_luna_subagents",
+        "native_subagents",
+        "allow_native_luna",
+        "external_network",
+        "authenticated_external_requests",
+        "allow_external_requests",
+        "normal_network_operations",
+    ):
+        if key in policy and not isinstance(policy[key], bool):
+            errors.append(f"autonomy_session.transport_policy.{key} must be boolean")
+    for key in ("native_override", "native_luna_transport_override"):
+        if key in policy:
+            value = policy[key]
+            if isinstance(value, dict):
+                if "enabled" in value and not isinstance(value["enabled"], bool):
+                    errors.append(
+                        f"autonomy_session.transport_policy.{key}.enabled must be boolean"
+                    )
+            elif not isinstance(value, bool):
+                errors.append(f"autonomy_session.transport_policy.{key} must be boolean or object")
+    nested = policy.get("luna")
+    if nested is None:
+        nested = policy.get("luna_worker")
+    if nested is None or isinstance(nested, bool):
+        candidate = policy.get("native_luna")
+        if isinstance(candidate, dict):
+            nested = candidate
+    if nested is not None and not isinstance(nested, dict):
+        errors.append("autonomy_session.transport_policy.luna must be an object")
+    elif isinstance(nested, dict):
+        for key in (
+            "native_luna_subagents",
+            "native_subagents",
+            "allow_native",
+            "enabled",
+        ):
+            if key in nested and not isinstance(nested[key], bool):
+                errors.append(
+                    f"autonomy_session.transport_policy.luna.{key} must be boolean"
+                )
+
+
 def validate_budget(session: dict[str, Any], errors: list[str]) -> None:
     limits = require_object(session.get("global_limits"), "autonomy_session.global_limits", errors)
     used = require_object(
@@ -97,16 +264,107 @@ def validate_budget(session: dict[str, Any], errors: list[str]) -> None:
         "autonomy_session.global_budget_remaining",
         errors,
     )
+    raw_overrun = session.get("budget_overrun")
+    overrun = raw_overrun is not None
+    if overrun:
+        if not isinstance(raw_overrun, dict) or raw_overrun.get("status") != "overrun":
+            errors.append("autonomy_session.budget_overrun must be an overrun object")
+            overrun = False
+        elif not isinstance(raw_overrun.get("dimensions"), list) or not raw_overrun.get(
+            "dimensions"
+        ):
+            errors.append("budget_overrun.dimensions must be a non-empty list")
     for key in BUDGET_KEYS:
-        values = (limits.get(key), used.get(key), remaining.get(key))
-        if not all(is_nonnegative_number(value) for value in values):
-            errors.append(f"budget dimension {key} must contain nonnegative numbers")
+        limit = limits.get(key)
+        current = used.get(key)
+        rest = remaining.get(key)
+        if not is_nonnegative_number(limit) or not is_nonnegative_number(current):
+            errors.append(f"budget dimension {key} must contain nonnegative limits/use")
+            continue
+        if not isinstance(rest, (int, float)) or isinstance(rest, bool) or (
+            rest < 0 and not overrun
+        ):
+            errors.append(f"budget dimension {key} remaining is invalid")
             continue
         if used[key] > limits[key]:
-            errors.append(f"budget used exceeds global limit for {key}")
+            if not overrun:
+                errors.append(f"budget used exceeds global limit for {key}")
         expected = limits[key] - used[key]
         if abs(float(remaining[key]) - float(expected)) > 1e-9:
             errors.append(f"budget remaining is inconsistent for {key}")
+
+    reservations = session.get("budget_reservations")
+    reserved_totals = {key: 0 for key in BUDGET_KEYS}
+    if reservations is not None and not isinstance(reservations, dict):
+        errors.append("autonomy_session.budget_reservations must be an object")
+        reservations = {}
+    if isinstance(reservations, dict):
+        for reservation_id, reservation in reservations.items():
+            if not isinstance(reservation, dict):
+                errors.append(f"budget reservation {reservation_id} must be an object")
+                continue
+            status = reservation.get("status", "reserved")
+            if status not in {"reserved", "finalized"}:
+                errors.append(f"budget reservation {reservation_id} has invalid status")
+                continue
+            amounts = reservation.get("reserved")
+            if not isinstance(amounts, dict):
+                errors.append(f"budget reservation {reservation_id}.reserved must be an object")
+                continue
+            for key in BUDGET_KEYS:
+                value = amounts.get(key)
+                if not is_nonnegative_number(value):
+                    errors.append(
+                        f"budget reservation {reservation_id}.{key} must be nonnegative"
+                    )
+                elif status == "reserved":
+                    reserved_totals[key] += value
+            if status == "finalized":
+                settled = reservation.get("settled")
+                if settled is not None and not isinstance(settled, dict):
+                    errors.append(
+                        f"budget reservation {reservation_id}.settled must be an object"
+                    )
+    declared_reserved = session.get("global_budget_reserved")
+    if declared_reserved is not None:
+        if not isinstance(declared_reserved, dict):
+            errors.append("autonomy_session.global_budget_reserved must be an object")
+        else:
+            for key in BUDGET_KEYS:
+                if not is_nonnegative_number(declared_reserved.get(key)):
+                    errors.append(
+                        f"global_budget_reserved.{key} must be nonnegative"
+                    )
+                elif abs(float(declared_reserved[key]) - float(reserved_totals[key])) > 1e-9:
+                    errors.append(f"global_budget_reserved is inconsistent for {key}")
+    available = session.get("global_budget_available")
+    if available is not None:
+        if not isinstance(available, dict):
+            errors.append("autonomy_session.global_budget_available must be an object")
+        else:
+            for key in BUDGET_KEYS:
+                if (
+                    not isinstance(available.get(key), (int, float))
+                    or isinstance(available.get(key), bool)
+                    or (available.get(key) < 0 and not overrun)
+                ):
+                    errors.append(
+                        f"global_budget_available.{key} is invalid"
+                    )
+                elif is_nonnegative_number(limits.get(key)) and is_nonnegative_number(
+                    used.get(key)
+                ):
+                    expected = limits[key] - used[key] - reserved_totals[key]
+                    if abs(float(available[key]) - float(expected)) > 1e-9:
+                        errors.append(f"global_budget_available is inconsistent for {key}")
+    for key in BUDGET_KEYS:
+        if (
+            is_nonnegative_number(limits.get(key))
+            and is_nonnegative_number(used.get(key))
+            and used[key] + reserved_totals[key] > limits[key]
+            and not overrun
+        ):
+            errors.append(f"used plus active reservations exceeds global limit for {key}")
 
 
 def validate_routes(research: dict[str, Any], adapter: dict[str, Any], errors: list[str]) -> None:
@@ -200,7 +458,13 @@ def validate_brain_lineage(brain: dict[str, Any], errors: list[str]) -> None:
             errors.append(f"brain_task_lineage[{index}] active with successor")
 
 
-def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], errors: list[str]) -> None:
+def validate_state(
+    root: Path,
+    adapter: dict[str, Any],
+    state: dict[str, Any],
+    errors: list[str],
+    warnings: list[str],
+) -> None:
     if state.get("schema_version") != 4:
         errors.append("pipeline_state schema_version must be 4")
     if state.get("project_id") != adapter.get("project_id"):
@@ -221,6 +485,7 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
         for key, value in values.items():
             if not isinstance(value, bool):
                 errors.append(f"autonomy_session.{label}.{key} must be boolean")
+    validate_transport_policy(session, errors)
     validate_budget(session, errors)
 
     brain = require_object(state.get("brain_runtime"), "brain_runtime", errors)
@@ -229,7 +494,21 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
         errors.append("brain_runtime.active_brain_generation must be a positive integer")
     if brain.get("context_health") not in CONTEXT_HEALTH:
         errors.append("brain_runtime.context_health is invalid")
-    compaction_count = brain.get("context_compaction_count", 0)
+    threshold = rollover_threshold(brain, warnings)
+    for threshold_key in ("rollover_threshold",):
+        if threshold_key in brain and (
+            isinstance(brain[threshold_key], bool)
+            or not isinstance(brain[threshold_key], int)
+            or brain[threshold_key] < 1
+        ):
+            errors.append(f"brain_runtime.{threshold_key} must be a positive integer")
+    raw_compaction_count = brain.get("context_compaction_count", 0)
+    if "observable_context_compactions" in brain and "context_compaction_count" not in brain:
+        warnings.append(
+            "legacy observable_context_compactions is not promoted into the current "
+            "Brain generation counter"
+        )
+    compaction_count = raw_compaction_count
     if (
         not isinstance(compaction_count, int)
         or isinstance(compaction_count, bool)
@@ -251,7 +530,7 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
         errors.append("recorded compaction event IDs exceed compaction count")
     compaction_floor = (
         "rollover_required"
-        if compaction_count >= 2
+        if compaction_count >= threshold
         else "rollover_recommended"
         if compaction_count == 1
         else "healthy"
@@ -269,8 +548,12 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
         not isinstance(rollover_reason, str) or not rollover_reason
     ):
         errors.append("brain_runtime.rollover_reason must be null or a non-empty string")
-    if compaction_count >= 2 and rollover_reason != "second_context_compaction":
-        errors.append("second context compaction must set its rollover reason")
+    if (
+        compaction_count >= threshold
+        and not isinstance(rollover_reason, str)
+        and brain.get("handoff_status") not in {"transferred", "platform_blocked"}
+    ):
+        errors.append("rollover threshold reached without a rollover reason")
     if brain.get("handoff_status") not in HANDOFF_STATUS:
         errors.append("brain_runtime.handoff_status is invalid")
     if not isinstance(brain.get("rollover_count"), int) or brain.get("rollover_count", -1) < 0:
@@ -286,6 +569,7 @@ def validate_state(root: Path, adapter: dict[str, Any], state: dict[str, Any], e
         errors.append("pending successor generation is allowed only while handoff is prepared")
 
     research = require_object(state.get("research_runtime"), "research_runtime", errors)
+    validate_control(state, session, research, errors, warnings)
     if research.get("state") not in STATES:
         errors.append("research_runtime.state is invalid")
     if not isinstance(research.get("stage_count"), int) or research.get("stage_count", -1) < 0:
@@ -360,7 +644,7 @@ def main() -> int:
     )
     state = load_object(state_path, errors) if state_path else {}
     if state:
-        validate_state(root, adapter, state, errors)
+        validate_state(root, adapter, state, errors, warnings)
 
     for key in ("normative_plan", "evidence_record", "status_record"):
         sources = adapter.get("source_precedence", {})

@@ -1,59 +1,36 @@
-# Initialization, Migration, and Resume
+# Initialize, adopt and resume
 
-## Minimal project records
+Normal entrypoints: `task_plan.md`, `findings.md`, `progress.md`, a read-only runtime snapshot, and the latest needed result. `research_history.md` is the detailed experimental/contribution record, retrieved by question rather than loaded in full. `brain_handoff.md` is read only for rollover. The JSON-compatible `research_pipeline.yaml` adapter identifies runtime paths.
 
-Use only:
+## New project
 
-```text
-task_plan.md
-findings.md
-progress.md
-research_pipeline.yaml
-artifacts/orchestration/pipeline_state.json
-artifacts/orchestration/brain_handoff.md   # only once rollover is prepared
-artifacts/orchestration/results/<experiment-id>/result.json
-```
-
-Do not create `next_experiment_prompt.md`, evolution ledgers, routine stage decisions, transition packets, audit reports, reuse ledgers, manifests, or report-per-worker records. Preserve old scientific files during migration but remove them from the active control contract.
-
-## New initialization
-
-Preview first:
-
+Preview then apply:
 ```powershell
-python scripts/init_autonomous_research.py --root "<project-root>" --project-id "<id>" --title "<title>" --goal "<goal>" --enable-autonomy
+python scripts/init_autonomous_research.py --root "<root>" --project-id "<id>" --title "<title>" --goal "<goal>" --enable-autonomy
 ```
+Repeat with `--apply` after inspecting the plan. Defaults: 240 wall minutes, eight worker assignments, zero external calls/cost. Use applicable user limits, not invented authority. The initializer creates missing main documents, research-history entrypoint, adapter and state. It never creates a scientific result or handoff.
 
-Then repeat with `--apply`. Defaults are finite local-only autonomy: 240 wall minutes, eight worker assignments, zero external calls, and zero external cost. Pass user-approved session ceilings explicitly when different.
+After initialization, the first Brain record publication adopts automatic adjacent-stage views. Native Luna is allowed as a local worker transport by default in new sessions, subject to actual platform availability; external/model permissions are unchanged.
 
-The initializer creates only missing main documents and the schema-v4 adapter/state. It does not create a handoff or experiment report.
+## Existing projects
 
-## Legacy migration
+For schema v2/v3 use `--migrate --apply`. Preserve a single recoverable adapter/state backup, identity, outcomes, invalidations, active work, cumulative usage and existing user stops. Do not replay experiments to make history tidy. Preserve external authorization evidence and apply only current applicable ceilings.
 
-For an existing schema-v2/v3 visible pipeline, add `--migrate --apply`. The migration:
+For schema v4 do not reinitialize or reset the runtime to adopt these improvements. Read `runtime_control.py snapshot`; reconcile an actual policy conflict using the latest user instruction and its scope. Old narrative amendments remain source evidence until a structured effective policy records the resolution. Never turn a generation-specific threshold into a global policy.
 
-- makes at most one recoverable `.pre-autonomous-v4.bak` copy of the old adapter and state;
-- preserves project identity, root, research question, route state, accepted artifacts, anomaly/invalidation records, active work, and cumulative resource use;
-- maps `STAGE_CLOSED` to a nonterminal next-stage replan when the project goal is unresolved;
-- maps old subagents to active Luna task records without replaying them;
-- removes `next_experiment_prompt` and evolution history from current source precedence without deleting user scientific history;
-- sets external remaining budget to zero unless newly authorized;
-- never computes or stores cryptographic identities;
-- never scans the repository or validates document headings.
+At the next safe boundary, follow [research-records.md](research-records.md): author a current record/snapshot packet, publish it, preserve pre-adoption files once, and link existing full research notes/artifacts/transcripts as the older history. Do not retroactively synthesize unverified personal contributions or reinterpret invalid experiments. Detailed historical backfill is separate from adopting automatic future maintenance.
 
-The former `advance-research-stage` and `visible-research-orchestrator` skill directories are retired and may be absent. Treat their names only as legacy migration markers; never call or recreate them from the unified loop.
+No historical Task ID is renumbered. New repairs/work items remain under their scientific milestone. Existing protected and no-replay commitments remain binding; replayable engineering roles apply only to new allocations.
 
-## Lightweight resume
+## Source precedence
 
-Read the adapter/state plus `task_plan.md`, `findings.md`, and `progress.md`. Read the current handoff only when `brain_runtime.handoff_status` indicates rollover. Read the latest active result when needed. Do not read the full historical tree or old conversations.
+1. Applicable explicit user instructions.
+2. Effective runtime for ownership, control mode, budget, authorization and active work.
+3. Short plan for stable formulation and next-stage strategy.
+4. Relevant findings for accepted evidence and claim boundaries.
+5. Progress for human-readable previous/current/next status.
+6. History/artifacts/transcripts for targeted traceability and contributions.
 
-Resolve conflicts by precedence:
+Resolve only contradictions affecting the next decision. Main-document upkeep is automatic and cannot resume paused research. Do not create routine audit packets, duplicate control ledgers or report-per-worker documents; the single generated history and original artifacts provide traceability.
 
-1. latest explicit user instruction;
-2. schema-v4 runtime for current ownership/budgets/authorization/active work;
-3. `task_plan.md` for stable goal/formulation/constraints;
-4. `findings.md` for accepted evidence and bounded claims;
-5. `progress.md` for recent status;
-6. current `brain_handoff.md` during rollover only.
-
-Fix only a concrete conflict that blocks the next decision. Then resume the autonomous outer loop immediately.
+Retired `advance-research-stage` and `visible-research-orchestrator` names are migration markers only; do not reactivate them.

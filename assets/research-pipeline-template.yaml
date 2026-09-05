@@ -13,12 +13,14 @@
     "orchestration_root": "artifacts/orchestration",
     "pipeline_state": "artifacts/orchestration/pipeline_state.json",
     "brain_handoff": "artifacts/orchestration/brain_handoff.md",
-    "results_root": "artifacts/orchestration/results"
+    "results_root": "artifacts/orchestration/results",
+    "research_history": "research_history.md",
+    "records_index": "artifacts/orchestration/records_index.json"
   },
   "coordination": {
-    "surface": "codex_cli_ephemeral_workers",
+    "surface": "native_luna_or_codex_cli",
     "primary_role": "one_active_brain",
-    "delegated_agent": "luna_worker_via_codex_exec",
+    "delegated_agent": "luna_worker",
     "successor_top_level_tasks": "brain_rollover_only",
     "shared_control_writes": "active_brain_generation_only"
   },
@@ -31,7 +33,12 @@
     ],
     "default_experiment_artifact": "result.json",
     "full_spec_report": "complex_expensive_or_confirmatory_only",
-    "update_on_substantive_change_only": true
+    "update_on_substantive_change_only": true,
+    "working_memory_scope": "stable_invariants_and_adjacent_scientific_stages",
+    "automatic_close_publication": "scripts/research_records.py publish",
+    "history_document": "research_history.md",
+    "history_default_load": false,
+    "working_document_byte_limits": {"task_plan.md": 12288, "findings.md": 20480, "progress.md": 8192}
   },
   "portfolio_policy": {
     "default_active_routes": 1,
@@ -61,14 +68,15 @@
   },
   "models": {
     "brain": {
+      "model": "gpt-6-astra",
       "role": "research_director"
     },
     "luna_worker": {
       "model": "gpt-5.6-luna",
       "reasoning": "max",
-      "transport": "codex_cli_ephemeral",
+      "transport": "native_preferred_cli_supported",
       "runner": "scripts/run_luna_worker.py",
-      "identity_acceptance": "catalog_plus_runtime_header"
+      "identity_acceptance": "platform_configuration_and_runtime_receipt"
     }
   },
   "legacy_compatibility": {
